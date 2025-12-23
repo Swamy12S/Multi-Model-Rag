@@ -4,10 +4,10 @@ import random
 import streamlit as st
 from dotenv import load_dotenv
 
-from ragbase.chain import ask_question, create_chain
+from ragbase.chain import ask_question, create_chain, create_multi_model_chain, create_citation_aware_chain
 from ragbase.config import Config
 from ragbase.ingestor import Ingestor
-from ragbase.model import create_llm
+from ragbase.model import create_llm, create_multi_llms
 from ragbase.retriever import create_retriever
 from ragbase.uploader import upload_files
 
@@ -28,12 +28,22 @@ LOADING_MESSAGES = [
 
 
 @st.cache_resource(show_spinner=False)
-def build_qa_chain(files):
+def build_qa_chain(files, use_multimodal=True, use_citations=True):
     file_paths = upload_files(files)
-    vector_store = Ingestor().ingest(file_paths)
-    llm = create_llm()
-    retriever = create_retriever(llm, vector_store=vector_store)
-    return create_chain(llm, retriever)
+    vector_store = Ingestor(use_multimodal=use_multimodal).ingest(file_paths)
+    
+    if Config.Model.USE_MULTI_MODEL:
+        llms = create_multi_llms()
+        retriever = create_retriever(llms[0], vector_store=vector_store, use_multimodal=use_multimodal)
+        return create_multi_model_chain(llms, retriever)
+    else:
+        llm = create_llm()
+        retriever = create_retriever(llm, vector_store=vector_store, use_multimodal=use_multimodal)
+        
+        if use_citations:
+            return create_citation_aware_chain(llm, retriever)
+        else:
+            return create_chain(llm, retriever)
 
 
 async def ask_chain(question: str, chain):
@@ -61,8 +71,21 @@ async def ask_chain(question: str, chain):
 def show_upload_documents():
     holder = st.empty()
     with holder.container():
-        st.header("Multi PDF Chat")
-        st.subheader("Get answers from your documents")
+        st.header("Multi-Modal PDF Chat")
+        st.subheader("Get answers from your documents with citations")
+        
+        # Configuration options
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            use_multi = st.checkbox("Enable Multi-Model LLM", value=Config.Model.USE_MULTI_MODEL)
+            Config.Model.USE_MULTI_MODEL = use_multi
+        
+        with col2:
+            use_multimodal = st.checkbox("Enable Multi-Modal Processing", value=True)
+        
+        with col3:
+            use_citations = st.checkbox("Show Citations", value=True)
+        
         uploaded_files = st.file_uploader(
             label="Upload PDF files", type=["pdf"], accept_multiple_files=True
         )
@@ -72,7 +95,7 @@ def show_upload_documents():
 
     with st.spinner("Analyzing your document(s)..."):
         holder.empty()
-        return build_qa_chain(uploaded_files)
+        return build_qa_chain(uploaded_files, use_multimodal=use_multimodal, use_citations=use_citations)
 
 
 def show_message_history():
